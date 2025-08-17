@@ -21,6 +21,7 @@ from datetime import datetime
 import re
 import io
 import base64
+from urllib.parse import urlparse
 
 # Page configuration
 st.set_page_config(
@@ -29,7 +30,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 
 st.markdown("""
 <style>
@@ -61,23 +61,32 @@ st.markdown("""
     border-radius: 8px;
     border: 1px solid #c3e6cb;
 }
+.connection-url-input {
+    background: #f8f9fa;
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin: 0.5rem 0;
+}
 </style>
 """, unsafe_allow_html=True)
-
 
 st.markdown("""
 <div class="main-header">
     <h1>🚀 Advanced SQL Database Chat Assistant</h1>
     <p>AI-powered database analysis with visualizations, exports, and intelligent insights</p>
+    <p><strong>✨ Now with Neon PostgreSQL Support!</strong></p>
 </div>
 """, unsafe_allow_html=True)
 
-
+# Database connection constants
 POSTGRES = "POSTGRES"
+POSTGRES_URL = "POSTGRES_URL"
 LOCALDB = "USE_LOCALDB"
 MYSQL = "USE_MYSQL"
 SQLITE_FILE = "SQLITE_FILE"
 
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "query_history" not in st.session_state:
@@ -89,7 +98,7 @@ if "favorite_queries" not in st.session_state:
 if "export_data" not in st.session_state:
     st.session_state.export_data = []
 
-
+# Sidebar configuration
 with st.sidebar:
     st.header("🔧 Database Configuration")
     
@@ -97,7 +106,8 @@ with st.sidebar:
         "SQLite Sample Database",
         "Upload SQLite File",
         "Connect to MySQL",
-        "Connect to PostgreSQL"
+        "Connect to PostgreSQL (Individual Parameters)",
+        "Connect to PostgreSQL (Connection URL) - Neon Compatible"
     ]
     
     selected_opt = st.selectbox("Choose Database Type", db_options)
@@ -110,8 +120,9 @@ with st.sidebar:
         mysql_user = st.text_input("Username", "root")
         mysql_password = st.text_input("Password", type="password")
         mysql_db = st.text_input("Database Name", help="Name of the MySQL database")
+        postgres_url = None
         
-    elif "PostgreSQL" in selected_opt:
+    elif "Individual Parameters" in selected_opt:
         db_uri = POSTGRES
         st.subheader("PostgreSQL Configuration")
         mysql_host = st.text_input("Host", "localhost", help="PostgreSQL server hostname")
@@ -119,17 +130,73 @@ with st.sidebar:
         mysql_user = st.text_input("Username", "postgres")
         mysql_password = st.text_input("Password", type="password")
         mysql_db = st.text_input("Database Name", help="Name of the PostgreSQL database")
+        postgres_url = None
+        
+    elif "Connection URL" in selected_opt:
+        db_uri = POSTGRES_URL
+        st.subheader("🎯 PostgreSQL URL Connection")
+        st.info("Perfect for Neon, Supabase, Railway, and other cloud PostgreSQL providers!")
+        
+        postgres_url = st.text_area(
+            "Database Connection URL",
+            placeholder="postgresql://username:password@host:port/database?sslmode=require",
+            help="Enter your complete PostgreSQL connection URL. Example for Neon: postgresql://neondb_owner:npg_YQ0xTfoFALz6@ep-morning-recipe-aevzeb7i-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require",
+            height=100
+        )
+        
+        if postgres_url:
+            try:
+                parsed_url = urlparse(postgres_url)
+                st.success(f"✅ URL parsed successfully!")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Host:** {parsed_url.hostname}")
+                    st.write(f"**Port:** {parsed_url.port}")
+                with col2:
+                    st.write(f"**Database:** {parsed_url.path[1:] if parsed_url.path else 'N/A'}")
+                    st.write(f"**SSL:** {'Yes' if 'sslmode=require' in postgres_url else 'No'}")
+            except Exception as e:
+                st.error(f"❌ Invalid URL format: {str(e)}")
+        
+        mysql_host = mysql_user = mysql_password = mysql_db = mysql_port = None
         
     elif "Upload SQLite" in selected_opt:
         db_uri = SQLITE_FILE
         uploaded_file = st.file_uploader("Upload SQLite Database", type=['db', 'sqlite', 'sqlite3'])
         mysql_host = mysql_user = mysql_password = mysql_db = mysql_port = None
+        postgres_url = None
         
     else:  # Sample SQLite
         db_uri = LOCALDB
         mysql_host = mysql_user = mysql_password = mysql_db = mysql_port = None
+        postgres_url = None
     
     st.divider()
+    
+    # Connection examples
+    if db_uri == POSTGRES_URL:
+        with st.expander("📚 Connection URL Examples"):
+            st.markdown("""
+            **Neon PostgreSQL:**
+            ```
+            postgresql://neondb_owner:password@ep-xxx-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require
+            ```
+            
+            **Supabase:**
+            ```
+            postgresql://postgres:password@db.xxx.supabase.co:5432/postgres
+            ```
+            
+            **Railway:**
+            ```
+            postgresql://postgres:password@containers-us-west-xxx.railway.app:5432/railway
+            ```
+            
+            **Heroku:**
+            ```
+            postgres://user:password@host:5432/database
+            ```
+            """)
     
     st.subheader("🤖 AI Configuration")
     api_key = st.text_input("Groq API Key", type="password", help="Get your API key from https://console.groq.com/")
@@ -157,6 +224,7 @@ with st.sidebar:
     
     selected_template = st.selectbox("Choose Template", ["Custom Query"] + list(templates.keys()))
 
+# Validation checks
 if not api_key:
     st.warning("⚠️ Please enter your Groq API key to continue")
     st.stop()
@@ -164,6 +232,11 @@ if not api_key:
 if db_uri in [MYSQL, POSTGRES]:
     if not all([mysql_host, mysql_user, mysql_password, mysql_db]):
         st.warning("⚠️ Please fill in all database connection fields")
+        st.stop()
+
+if db_uri == POSTGRES_URL:
+    if not postgres_url:
+        st.warning("⚠️ Please enter your PostgreSQL connection URL")
         st.stop()
 
 if db_uri == SQLITE_FILE and not uploaded_file:
@@ -176,6 +249,7 @@ def create_enhanced_sample_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
+    # Students table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS students (
             student_id INTEGER PRIMARY KEY,
@@ -196,6 +270,7 @@ def create_enhanced_sample_db():
         )
     ''')
     
+    # Courses table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS courses (
             course_id INTEGER PRIMARY KEY,
@@ -212,6 +287,7 @@ def create_enhanced_sample_db():
         )
     ''')
     
+    # Instructors table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS instructors (
             instructor_id INTEGER PRIMARY KEY,
@@ -225,6 +301,7 @@ def create_enhanced_sample_db():
         )
     ''')
     
+    # Enrollments table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS enrollments (
             enrollment_id INTEGER PRIMARY KEY,
@@ -239,6 +316,7 @@ def create_enhanced_sample_db():
         )
     ''')
     
+    # Payments table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS payments (
             payment_id INTEGER PRIMARY KEY,
@@ -256,6 +334,7 @@ def create_enhanced_sample_db():
     import random
     from datetime import date, timedelta
     
+    # Insert sample data
     instructors_data = [
         ('Dr. Sarah', 'Johnson', 'sarah.johnson@university.edu', 'Computer Science', '2018-08-15', 75000, 'CS-201'),
         ('Prof. Michael', 'Brown', 'michael.brown@university.edu', 'Mathematics', '2015-01-10', 68000, 'MATH-105'),
@@ -304,6 +383,7 @@ def create_enhanced_sample_db():
     ]
     cursor.executemany('INSERT OR REPLACE INTO courses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', courses_data)
     
+    # Generate enrollments and payments data
     enrollments_data = []
     grades = ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D']
     grade_points = {'A': 4.0, 'A-': 3.7, 'B+': 3.3, 'B': 3.0, 'B-': 2.7, 'C+': 2.3, 'C': 2.0, 'C-': 1.7, 'D+': 1.3, 'D': 1.0}
@@ -344,8 +424,24 @@ def create_enhanced_sample_db():
     conn.close()
     return db_path
 
+def validate_postgres_url(url):
+    """Validate PostgreSQL connection URL format"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ['postgresql', 'postgres']:
+            return False, "URL must start with 'postgresql://' or 'postgres://'"
+        if not parsed.hostname:
+            return False, "Missing hostname in URL"
+        if not parsed.username:
+            return False, "Missing username in URL"
+        if not parsed.password:
+            return False, "Missing password in URL"
+        return True, "Valid PostgreSQL URL"
+    except Exception as e:
+        return False, f"Invalid URL format: {str(e)}"
+
 def configure_database(db_uri, **kwargs):
-    """Enhanced database configuration with better error handling"""
+    """Enhanced database configuration with better error handling and URL support"""
     try:
         if db_uri == LOCALDB:
             dbfilepath = create_enhanced_sample_db()
@@ -369,6 +465,26 @@ def configure_database(db_uri, **kwargs):
         elif db_uri == POSTGRES:
             connection_string = f"postgresql+psycopg2://{kwargs['mysql_user']}:{kwargs['mysql_password']}@{kwargs['mysql_host']}:{kwargs.get('mysql_port', 5432)}/{kwargs['mysql_db']}"
             return SQLDatabase(create_engine(connection_string))
+        
+        elif db_uri == POSTGRES_URL:
+            postgres_url = kwargs.get('postgres_url')
+            if not postgres_url:
+                raise Exception("PostgreSQL URL is required")
+            
+            # Validate URL format
+            is_valid, message = validate_postgres_url(postgres_url)
+            if not is_valid:
+                raise Exception(message)
+            
+            # Handle both 'postgres://' and 'postgresql://' schemes
+            if postgres_url.startswith('postgres://'):
+                postgres_url = postgres_url.replace('postgres://', 'postgresql://', 1)
+            
+            # Use psycopg2 driver
+            if '+psycopg2' not in postgres_url:
+                postgres_url = postgres_url.replace('postgresql://', 'postgresql+psycopg2://', 1)
+            
+            return SQLDatabase(create_engine(postgres_url))
             
     except Exception as e:
         st.error(f"Database connection error: {str(e)}")
@@ -401,19 +517,19 @@ def get_database_statistics(db):
                     if 'sqlite' in str(db._engine.url):
                         columns_result = db.run(f"PRAGMA table_info({table})")
                     else:
-                        columns_result = db.run(f"DESCRIBE {table}")
+                        columns_result = db.run(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table}'")
                     
                     if columns_result:
-                        column_count = len([line for line in columns_result.split('\n') if line.strip() and '|' in line]) - 1
-                        column_count = max(0, column_count)  # Ensure non-negative
+                        column_count = len([line for line in columns_result.split('\n') if line.strip() and ('|' in line or column_count == 0)])
+                        column_count = max(0, column_count - 1 if column_count > 0 else 0)
                     else:
                         column_count = 0
                 except:
                     column_count = 0
                 
                 stats['tables'][table] = {
-                    'row_count': max(0, row_count),  # Ensure non-negative
-                    'columns': max(0, column_count)   # Ensure non-negative
+                    'row_count': max(0, row_count),
+                    'columns': max(0, column_count)
                 }
             except Exception as e:
                 print(f"Error getting stats for table {table}: {e}")
@@ -437,7 +553,7 @@ def create_visualization(query_result, query_text):
         rows = []
         headers = None
         
-        for line in lines[1:]:  # Skip the first line which might be formatting
+        for line in lines[1:]:
             if line.strip() and '|' in line:
                 row = [cell.strip() for cell in line.split('|') if cell.strip()]
                 if headers is None:
@@ -450,6 +566,7 @@ def create_visualization(query_result, query_text):
             
         df = pd.DataFrame(rows, columns=headers)
         
+        # Convert numeric columns
         for col in df.columns:
             try:
                 df[col] = pd.to_numeric(df[col])
@@ -520,6 +637,7 @@ def save_query_to_history(query, response, execution_time):
     if len(st.session_state.query_history) > 50:
         st.session_state.query_history.pop(0)
 
+# Database connection setup
 with st.spinner("🔄 Connecting to database..."):
     db_kwargs = {}
     if db_uri in [MYSQL, POSTGRES]:
@@ -530,6 +648,8 @@ with st.spinner("🔄 Connecting to database..."):
             'mysql_db': mysql_db,
             'mysql_port': locals().get('mysql_port')
         })
+    elif db_uri == POSTGRES_URL:
+        db_kwargs['postgres_url'] = postgres_url
     elif db_uri == SQLITE_FILE:
         db_kwargs['uploaded_file'] = uploaded_file
     
@@ -539,6 +659,7 @@ if not db:
     st.error("❌ Failed to connect to database")
     st.stop()
 
+# Initialize AI agent
 try:
     llm = ChatGroq(
         groq_api_key=api_key,
@@ -565,6 +686,7 @@ except Exception as e:
     st.error(f"❌ Error initializing AI agent: {str(e)}")
     st.stop()
 
+# Main interface
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -581,7 +703,8 @@ with col1:
             avg_rows = total_rows // max(stats.get('table_count', 1), 1)
             st.metric("Avg Records/Table", f"{avg_rows:,}")
         with metric_cols[3]:
-            st.metric("Connection Status", "🟢 Active")
+            connection_status = "🟢 Neon" if db_uri == POSTGRES_URL else "🟢 Active"
+            st.metric("Connection Status", connection_status)
         
         if stats.get('tables'):
             st.subheader("📋 Table Details")
@@ -616,14 +739,21 @@ with col2:
 st.divider()
 st.subheader("💬 Chat with your Database")
 
+# Initialize chat messages
 if not st.session_state.messages:
+    welcome_message = f"Hello! I'm your AI database assistant. I can help you analyze your database with {st.session_state.db_stats.get('table_count', 0)} tables."
+    if db_uri == POSTGRES_URL:
+        welcome_message += " 🎉 Great choice using Neon PostgreSQL!"
+    welcome_message += " What would you like to explore?"
+    
     st.session_state.messages = [
         {
             "role": "assistant", 
-            "content": f"Hello! I'm your AI database assistant. I can help you analyze your database with {st.session_state.db_stats.get('table_count', 0)} tables. What would you like to explore?"
+            "content": welcome_message
         }
     ]
 
+# Display chat messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
@@ -634,6 +764,7 @@ for msg in st.session_state.messages:
         if "export_data" in msg and enable_exports:
             st.markdown(msg["export_data"], unsafe_allow_html=True)
 
+# Handle user input
 user_query = st.chat_input("Ask anything about your database...")
 
 if selected_template != "Custom Query" and selected_template in templates:
@@ -660,11 +791,13 @@ if user_query:
             
             st.write("**Answer:**")
             st.write(response)
+            
             if show_sql:
                 sql_match = re.search(r'```sql\n(.*?)\n```', response, re.DOTALL)
                 if sql_match:
                     st.code(sql_match.group(1), language='sql')
             
+            # Create visualization
             viz = create_visualization(response, user_query)
             message_data = {"role": "assistant", "content": response}
             
@@ -673,6 +806,7 @@ if user_query:
                 st.plotly_chart(viz, use_container_width=True)
                 message_data["visualization"] = viz
             
+            # Export option
             if enable_exports and len(response.split('\n')) > 5:  # If response looks like tabular data
                 export_link = export_to_csv(response, f"query_result_{int(time.time())}.csv")
                 if export_link:
@@ -692,6 +826,7 @@ if user_query:
 
 st.divider()
 
+# Tabs for additional features
 tab1, tab2, tab3, tab4 = st.tabs(["📚 Query History", "⭐ Favorites", "📊 Analytics", "⚙️ Advanced"])
 
 with tab1:
@@ -770,6 +905,7 @@ with tab3:
         else:
             st.info("No data available for visualization")
         
+        # Query performance analytics
         if st.session_state.query_history:
             st.subheader("⚡ Query Performance")
             perf_data = [
@@ -849,6 +985,8 @@ with tab4:
         st.rerun()
 
 st.divider()
+
+# Footer actions
 footer_col1, footer_col2, footer_col3 = st.columns([1, 1, 1])
 
 with footer_col1:
@@ -874,6 +1012,7 @@ with footer_col3:
         st.session_state.messages.append({"role": "user", "content": suggestion_query})
         st.rerun()
 
+# Enhanced sidebar information
 with st.sidebar:
     st.divider()
     st.markdown("### 📈 Session Statistics")
@@ -885,7 +1024,42 @@ with st.sidebar:
         st.metric("Avg Query Time", f"{avg_time:.2f}s")
     
     st.divider()
+    st.markdown("### 🌐 Connection Info")
+    if db_uri == POSTGRES_URL:
+        st.success("🎯 Connected via URL")
+        if postgres_url:
+            parsed = urlparse(postgres_url)
+            st.write(f"**Host:** {parsed.hostname}")
+            st.write(f"**Database:** {parsed.path[1:] if parsed.path else 'default'}")
+            st.write(f"**SSL:** {'Enabled' if 'sslmode=require' in postgres_url else 'Disabled'}")
+    elif db_uri == POSTGRES:
+        st.info("🐘 PostgreSQL Connection")
+    elif db_uri == MYSQL:
+        st.info("🐬 MySQL Connection")
+    else:
+        st.info("📁 SQLite Connection")
+    
+    st.divider()
     st.markdown("### 🔧 Troubleshooting")
+    
+    with st.expander("Neon PostgreSQL Tips"):
+        st.markdown("""
+        **Connection URL Format:**
+        ```
+        postgresql://username:password@host:port/database?sslmode=require
+        ```
+        
+        **Common Issues:**
+        - Ensure SSL mode is included for Neon
+        - Check if your IP is whitelisted
+        - Verify credentials are correct
+        - Try removing query parameters if having issues
+        
+        **Neon Specific:**
+        - Use the pooler connection string for better performance
+        - SSL is required for Neon connections
+        - Database automatically sleeps after inactivity
+        """)
     
     with st.expander("Common Issues"):
         st.markdown("""
@@ -893,6 +1067,7 @@ with st.sidebar:
         - Check your credentials
         - Ensure database server is running
         - Verify network connectivity
+        - For cloud databases, check IP whitelisting
         
         **Query Errors:**
         - Check table and column names
@@ -919,9 +1094,15 @@ with st.sidebar:
         -- Group by analysis
         SELECT category, COUNT(*) 
         FROM table_name GROUP BY category;
+        
+        -- Join tables
+        SELECT a.*, b.column_name
+        FROM table_a a
+        JOIN table_b b ON a.id = b.foreign_id;
         ```
         """)
     
     st.markdown("---")
     st.markdown("*Built with Streamlit & LangChain*")
     st.markdown("*Powered by Groq AI*")
+    st.markdown("*🌟 Enhanced for Neon PostgreSQL*")
